@@ -16,12 +16,33 @@ The app does not restore the previous clipboard contents. When macOS cannot expo
 
 ## Requirements
 
-- macOS, with Xcode Command Line Tools (`xcode-select --install`), Swift, Python 3 and the macOS `security` and `strings` tools.
+- macOS 13 or later, Python 3 and the macOS `security` and `strings` tools. Building from source also requires Xcode Command Line Tools and Swift.
 - Warp installed at `/Applications/Warp.app` and signed into a session with working voice input.
 - Internet access and microphone, Accessibility, and potentially Input Monitoring permissions for Warp Voice.
 - The current implementation depends on Warp's Stable bundle ID and Keychain entry; Preview or alternate installations may not work.
 
-## Build and install
+## Install
+
+1. Download **Warp-Voice.zip** from the [latest GitHub release](https://github.com/dovudo/warp-voice/releases/latest).
+2. Open the ZIP and move **Warp Voice.app** to **Applications**. Open it from there.
+3. This experimental release is ad-hoc signed, not notarized. If macOS blocks its first launch, open **System Settings → Privacy & Security**, find the message for Warp Voice and select **Open Anyway**. Only open the release if you trust this repository and its maintainers.
+4. Grant microphone access when prompted. In **System Settings → Privacy & Security → Accessibility**, add and enable **Warp Voice**; grant **Input Monitoring** too if requested.
+5. In the 🎙 menu, select **Проверить разрешения** (“Check permissions”). macOS may require an app restart. A Keychain prompt may ask to allow access to Warp's saved session.
+6. Focus a text field, hold the backtick / `ё` key, speak, then release it. Wait for processing to finish.
+
+The app is macOS 13 or later and supports Apple Silicon and Intel. Warp must be installed and signed in. Python 3 and the system `security` and `strings` tools are also required.
+
+## Updates
+
+Warp Voice checks the latest GitHub Release at startup and once a day while running. If a newer version is found, the menu offers **Установить обновление** (“Install update”); choose it and confirm to download and install. You can also choose **Проверить обновления** (“Check for updates”) manually. Notifications are optional: the menu remains the reliable place to see an update.
+
+Before replacing the app, the updater checks the expected release URL, archive size, GitHub's SHA-256 asset digest, code-signature integrity, bundle identifier and version. It stages the download alongside the installed app and keeps the previous app in a hidden `.warpvoice-update-*` folder in the same directory for recovery. An error before replacement leaves the current app in place; the helper restores it if replacement or launch fails. The app must be in a writable location such as `/Applications` or `~/Applications`.
+
+The release is not signed with an Apple Developer ID or notarized. SHA-256 verifies the downloaded file against GitHub release metadata; it does not provide independent publisher authentication. macOS may require Accessibility, microphone or Keychain permissions again after an update because ad-hoc signatures change. If the app does not restart, open it from Applications; for recovery, the hidden backup folder contains `previous.app`.
+
+The app does not currently start automatically at login.
+
+## Build from source
 
 ```sh
 git clone https://github.com/dovudo/warp-voice.git
@@ -30,14 +51,7 @@ cd warp-voice
 open "build/Warp Voice.app"
 ```
 
-The build produces an ad-hoc signed app. To make it easier to locate in System Settings, move the built `Warp Voice.app` from `build/` to `/Applications` using Finder, then open that copy. If macOS blocks the first launch, use its standard Open Anyway option in Privacy & Security.
-
-1. Grant microphone access when prompted.
-2. In **System Settings → Privacy & Security → Accessibility**, add and enable **Warp Voice**. Grant **Input Monitoring** too if macOS requests it.
-3. Click the menu-bar microphone and select **Проверить разрешения** (“Check permissions”). macOS may require an app restart.
-4. Focus a text field, hold the backtick / `ё` key, speak, then release it. Wait for processing to finish.
-
-A Keychain prompt may ask you to allow access to Warp's saved session. Rebuilding the ad-hoc signed app can cause macOS to request permissions again. The app does not currently start automatically at login.
+Building requires Xcode Command Line Tools (`xcode-select --install`) and Swift. The app is signed locally with an ad-hoc signature. Moving it to Applications makes it easier to select in System Settings.
 
 ## How it works
 
@@ -54,7 +68,7 @@ The helper reads Warp's Firebase client identifier from the installed app. Authe
 - The key is fixed to the physical backtick / `ё` key. Press-and-hold starts recording after a short threshold; starting to speak immediately can clip the beginning.
 - Accuracy can differ from Warp's own voice input even though both request Wispr. Capture and resampling are different; exact server-side models and processing are not observable. See [docs/accuracy.md](docs/accuracy.md).
 - Notifications can fail or be disabled. An empty transcript or network/authentication failure may not be obvious without the diagnostic log.
-- No installer, auto-update, configurable hotkey, language selector, cancellation, or background launch setting yet.
+- Updates are not notarized and may require macOS permissions again. There is no configurable hotkey, language selector, cancellation, or background launch setting yet.
 
 ## Troubleshooting
 
@@ -71,6 +85,7 @@ Issues and pull requests are welcome. Please describe your macOS and Warp versio
 ./build.sh
 swiftc Sources/HoldKey.swift Tests/main.swift -o /tmp/warpvoice-key-test
 /tmp/warpvoice-key-test
+/usr/bin/python3 -m unittest discover -s Tests -p 'test_update.py'
 ```
 
 Useful contributions include configurable shortcuts and languages, reliable permission onboarding, better error reporting, recording quality comparisons, stable app signing, automated tests, and safer paste handling. Changes to authentication and audio handling should include clear privacy and security considerations.

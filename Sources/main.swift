@@ -26,6 +26,11 @@ final class VoiceApp: NSObject, NSApplicationDelegate {
     var originalFocus: AXUIElement?
     var busy = false
     var started = false
+    var updateItem: NSMenuItem!
+    var updateVersion: String?
+    var updateInProgress = false
+    var updateCheckInProgress = false
+    var updateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         diagnostic("started")
@@ -34,11 +39,74 @@ final class VoiceApp: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Удерживайте ё / ` для диктовки", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Проверить разрешения", action: #selector(permissions), keyEquivalent: "")
+        updateItem = menu.addItem(withTitle: "Проверить обновления…", action: #selector(updateMenu), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Выйти", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         status.menu = menu
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         permissions()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.checkUpdates(manual: false) }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkUpdates(manual: false) }
+    }
+    var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0" }
+    func updateCommand(_ arguments: [String], completion: @escaping (Int32, Data, String) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            guard let script = Bundle.main.url(forResource: "updater", withExtension: "py") else {
+                DispatchQueue.main.async { completion(1, Data(), "Компонент обновления не найден.") }; return
+            }
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = [script.path] + arguments
+            let out = Pipe(), err = Pipe(); process.standardOutput = out; process.standardError = err
+            do {
+                try process.run()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let error = err.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let message = String(data: error, encoding: .utf8) ?? "Ошибка обновления."
+                DispatchQueue.main.async { completion(process.terminationStatus, data, message) }
+            } catch { DispatchQueue.main.async { completion(1, Data(), "Не удалось запустить проверку обновления.") } }
+        }
+    }
+    func alert(_ title: String, _ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let box = NSAlert(); box.messageText = title; box.informativeText = message; box.addButton(withTitle: "OK"); box.runModal()
+    }
+    @objc func updateMenu() {
+        if let version = updateVersion { offerUpdate(version) } else { checkUpdates(manual: true) }
+    }
+    func checkUpdates(manual: Bool) {
+        guard !updateCheckInProgress && !updateInProgress else { return }
+        updateCheckInProgress = true; updateItem.title = "Проверка обновлений…"
+        updateCommand(["check", currentVersion]) { code, data, error in
+            self.updateCheckInProgress = false
+            guard code == 0, let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                self.updateItem.title = "Проверить обновления…"
+                if manual { self.alert("Не удалось проверить обновления", error) }
+                return
+            }
+            if result["available"] as? Bool == true, let version = result["version"] as? String {
+                self.updateVersion = version; self.updateItem.title = "Установить обновление \(version)…"
+                if manual { self.offerUpdate(version) }
+                else { self.notice("Доступна новая версия Warp Voice", "Откройте меню 🎙, чтобы установить версию \(version).") }
+            } else {
+                self.updateVersion = nil; self.updateItem.title = "Проверить обновления…"
+                if manual { self.alert("Обновлений нет", "Установлена актуальная версия \(self.currentVersion).") }
+            }
+        }
+    }
+    func offerUpdate(_ version: String) {
+        guard !busy && !started && !updateInProgress else { alert("Дождитесь завершения диктовки", "После обработки можно установить обновление."); return }
+        NSApp.activate(ignoringOtherApps: true)
+        let box = NSAlert(); box.messageText = "Установить Warp Voice \(version)?"
+        box.informativeText = "Приложение скачает релиз с GitHub, проверит его и перезапустится. macOS может запросить разрешения повторно."
+        box.addButton(withTitle: "Установить"); box.addButton(withTitle: "Позже")
+        guard box.runModal() == .alertFirstButtonReturn else { return }
+        updateInProgress = true; updateItem.title = "Загрузка обновления…"; updateItem.isEnabled = false
+        updateCommand(["install", Bundle.main.bundleURL.path, currentVersion, version]) { code, _, error in
+            self.updateInProgress = false; self.updateItem.isEnabled = true
+            guard code == 0 else { self.updateItem.title = "Установить обновление \(version)…"; self.alert("Обновление не установлено", error); return }
+            NSApp.terminate(nil)
+        }
     }
     @objc func permissions() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -108,7 +176,7 @@ final class VoiceApp: NSObject, NSApplicationDelegate {
     }
     func startRecording() {
         diagnostic("recording requested busy=\(busy) microphone=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
-        guard !busy else { notice("Обработка ещё идёт", "Дождитесь завершения предыдущей диктовки."); return }
+        guard !busy && !updateInProgress else { notice("Обработка ещё идёт", "Дождитесь завершения текущей операции."); return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { notice("Микрофон недоступен", "Разрешите доступ к микрофону в настройках macOS."); return }
         originalPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         originalFocus = focused()
